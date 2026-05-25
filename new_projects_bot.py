@@ -1,105 +1,151 @@
 import os
 import requests
 import time
-import sqlite3
 import logging
-from datetime import datetime
 import schedule
 import threading
+from datetime import datetime
 
 from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 
-# ========================= RAILWAY CONFIG =========================
-BOT_TOKEN = os.getenv("8973126506:AAEup-O1Ba1ZDKw7VaQ5AvO3XpFVbuorE_o")
-YOUR_CHAT_ID = int(os.getenv("7495097942"))   # ← This must be set in Railway Variables
+# ===================== CONFIG =====================
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+YOUR_CHAT_ID = int(os.getenv("YOUR_CHAT_ID"))
 
+# Filters
 MIN_LIQUIDITY = int(os.getenv("MIN_LIQUIDITY", 1500))
-MIN_FDV = int(os.getenv("MIN_FDV", 4000))
-ENABLED_CHAINS = [x.strip() for x in os.getenv("ENABLED_CHAINS", "solana,base,ethereum").split(",")]
+MIN_FDV = int(os.getenv("MIN_FDV", 3500))
+BLACKLIST = ["test", "fake", "scam", "rug", "honeypot"]
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-print("🚀 Akira Bot Starting on Railway...")
-
-# DB Setup
-conn = sqlite3.connect("seen_projects.db", check_same_thread=False)
-conn.execute("CREATE TABLE IF NOT EXISTS seen (pair_id TEXT PRIMARY KEY, source TEXT, timestamp TEXT)")
-conn.commit()
-
 bot = Bot(token=BOT_TOKEN)
+seen = set()
 
-def is_seen(pair_id):
-    cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM seen WHERE pair_id=?", (pair_id,))
-    return cursor.fetchone() is not None
+print("🚀 Akira Max Mode Activated - Private Scanner")
 
-def mark_seen(pair_id, source):
-    conn.execute("INSERT OR IGNORE INTO seen (pair_id, source, timestamp) VALUES (?, ?, ?)",
-                 (pair_id, source, datetime.now().isoformat()))
-    conn.commit()
+# ===================== CORE FUNCTIONS =====================
+def is_blacklisted(name: str) -> bool:
+    return any(word in name.lower() for word in BLACKLIST)
 
-def send_alert(project, source):
+def send_alert(coin: dict, source: str):
     try:
-        msg = f"🚀 <b>New {source} Project</b>\n\n"
-        msg += f"💎 {project.get('name')} ({project.get('symbol')})\n"
-        msg += f"💰 Liq: ${project.get('liquidity',0):,.0f} | MCAP: ${project.get('mcap',0):,.0f}\n"
+        name = coin.get("name", "Unknown")
+        symbol = coin.get("symbol", "???")
+        mcap = coin.get("market_cap") or coin.get("usd_market_cap", 0)
+        liquidity = coin.get("liquidity", 0)
+        mint = coin.get("mint")
         
-        if project.get("url"):
-            msg += f"\n🔗 {project['url']}"
-        
+        if is_blacklisted(name):
+            return
+
+        msg = f"""🚀 <b>NEW {source.upper()} LAUNCH</b>
+
+💎 <b>{name} ({symbol})</b>
+📊 MCAP: ${mcap:,.0f}
+💰 Liquidity: ${liquidity:,.0f}
+⏰ Detected: {datetime.now().strftime('%H:%M:%S')}
+
+🔗 <a href='https://pump.fun/{mint}'>Pump.fun</a> | <a href='https://dexscreener.com/solana/{mint}'>DexScreener</a>
+        """
+
         bot.send_message(
-            chat_id=YOUR_CHAT_ID, 
-            text=msg, 
-            parse_mode=ParseMode.HTML, 
+            chat_id=YOUR_CHAT_ID,
+            text=msg,
+            parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
-        logger.info(f"✅ Alert sent → {project.get('name')}")
+        logger.info(f"✅ Alert Sent → {name}")
     except Exception as e:
-        logger.error(f"Send failed: {e}")
+        logger.error(f"Alert failed: {e}")
 
-# Pump.fun Scanner
+# ===================== MAIN SCANNER =====================
 def scan_pumpfun():
-    logger.info("Scanning Pump.fun...")
+    logger.info("Scanning Pump.fun for new launches...")
     try:
         r = requests.get(
-            "https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC", 
+            "https://frontend-api.pump.fun/coins?offset=0&limit=40&sort=created_timestamp&order=DESC",
             timeout=15
         )
-        coins = r.json() if r.status_code == 200 else []
         
+        if r.status_code != 200:
+            logger.warning("Pump.fun API not responding")
+            return
+            
+        coins = r.json()
+
         for coin in coins[:20]:
             mint = coin.get("mint")
-            if not mint or is_seen(mint):
+            if not mint or mint in seen:
                 continue
 
-            project = {
-                "name": coin.get("name"),
-                "symbol": coin.get("symbol"),
-                "mcap": coin.get("market_cap", 0),
-                "liquidity": coin.get("liquidity", 0),
-                "url": f"https://pump.fun/{mint}"
-            }
-            send_alert(project, "Pump.fun")
-            mark_seen(mint, "Pump.fun")
-            time.sleep(0.6)
-    except Exception as e:
-        logger.error(f"Pump.fun error: {e}")
+            mcap = coin.get("market_cap") or 0
+            liquidity = coin.get("liquidity") or 0
 
-# Main
+            if liquidity < MIN_LIQUIDITY and mcap < MIN_FDV:
+                continue
+
+            seen.add(mint)
+            send_alert(coin, "Pump.fun")
+            time.sleep(0.6)
+            
+    except Exception as e:
+        logger.error(f"Pump.fun scanner error: {e}")
+
+# ===================== COMMANDS =====================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔥 <b>Akira Max Mode Activated</b>\nPrivate Scanner Running...", parse_mode=ParseMode.HTML)
+
+async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"""<b>AKIRA STATUS</b>
+
+🟢 Status: Online
+📊 Min Liquidity: ${MIN_LIQUIDITY:,}
+📈 Min FDV: ${MIN_FDV:,}
+🔍 Scanning: Pump.fun (Real-time)
+🛡️ Blacklist: Active
+        """, parse_mode=ParseMode.HTML)
+
+async def setminliq(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global MIN_LIQUIDITY
+    try:
+        MIN_LIQUIDITY = int(context.args[0])
+        await update.message.reply_text(f"✅ Minimum Liquidity updated to ${MIN_LIQUIDITY:,}")
+    except:
+        await update.message.reply_text("Usage: /setminliq 2000")
+
+async def setminfdv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global MIN_FDV
+    try:
+        MIN_FDV = int(context.args[0])
+        await update.message.reply_text(f"✅ Minimum FDV updated to ${MIN_FDV:,}")
+    except:
+        await update.message.reply_text("Usage: /setminfdv 5000")
+
+# ===================== MAIN =====================
 def run_scanners():
-    schedule.every(22).seconds.do(scan_pumpfun)
+    schedule.every(18).seconds.do(scan_pumpfun)
     while True:
         schedule.run_pending()
         time.sleep(1)
 
 if __name__ == "__main__":
+    if not BOT_TOKEN or not YOUR_CHAT_ID:
+        logger.error("Missing BOT_TOKEN or YOUR_CHAT_ID in Variables!")
+        exit(1)
+
     threading.Thread(target=run_scanners, daemon=True).start()
 
     app = Application.builder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", lambda u,c: u.message.reply_text("✅ Akira is running on Railway!")))
     
-    logger.info("Bot Started Successfully - Polling...")
-    app.run_polling(drop_pending_updates=True)   # This helps with conflicts
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("status", status))
+    app.add_handler(CommandHandler("setminliq", setminliq))
+    app.add_handler(CommandHandler("setminfdv", setminfdv))
+
+    logger.info("Akira Sophisticated Scanner Started Successfully")
+    app.run_polling(drop_pending_updates=True)
