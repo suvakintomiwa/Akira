@@ -11,9 +11,9 @@ from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.constants import ParseMode
 
-# ========================= CONFIG =========================
+# ========================= RAILWAY CONFIG =========================
 BOT_TOKEN = os.getenv("8973126506:AAEup-O1Ba1ZDKw7VaQ5AvO3XpFVbuorE_o")
-YOUR_CHAT_ID = int(os.getenv("7495097942"))
+YOUR_CHAT_ID = int(os.getenv("7495097942"))   # ← This must be set in Railway Variables
 
 MIN_LIQUIDITY = int(os.getenv("MIN_LIQUIDITY", 1500))
 MIN_FDV = int(os.getenv("MIN_FDV", 4000))
