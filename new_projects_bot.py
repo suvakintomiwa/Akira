@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 seen = set()
 bot = Bot(token=BOT_TOKEN)
 
-print("🚀 Akira Private Scanner v3 Started")
+print("🚀 Akira Webhook Mode Activated")
 
 # ====================== ALERT ======================
 def send_alert(coin):
@@ -40,18 +40,23 @@ def send_alert(coin):
 📊 MCAP: ${mcap:,.0f}
 💰 Liquidity: ${liquidity:,.0f}
 
-🔗 <a href="https://pump.fun/{mint}">Pump.fun</a> • <a href="https://dexscreener.com/solana/{mint}">DexScreener</a>
+🔗 <a href="https://pump.fun/{mint}">Pump.fun</a> | <a href="https://dexscreener.com/solana/{mint}">DexScreener</a>
 """
 
-        bot.send_message(chat_id=YOUR_CHAT_ID, text=msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-        logger.info(f"✅ Sent alert: {name}")
+        bot.send_message(
+            chat_id=YOUR_CHAT_ID,
+            text=msg,
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+        logger.info(f"✅ Alert: {name}")
     except Exception as e:
-        logger.error(f"Send error: {e}")
+        logger.error(f"Send failed: {e}")
 
 # ====================== SCANNER ======================
 def scan_pumpfun():
     try:
-        logger.info("Scanning new coins...")
+        logger.info("Scanning Pump.fun...")
         r = requests.get(
             "https://frontend-api.pump.fun/coins?offset=0&limit=30&sort=created_timestamp&order=DESC",
             timeout=12
@@ -71,13 +76,13 @@ def scan_pumpfun():
 
             seen.add(mint)
             send_alert(coin)
-            time.sleep(0.8)
+            time.sleep(0.7)
     except Exception as e:
         logger.error(f"Scan error: {e}")
 
 # ====================== COMMANDS ======================
 async def start(update, context):
-    await update.message.reply_text("✅ <b>Akira is Running Successfully</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text("✅ <b>Akira Webhook Mode Active</b>\nScanning Pump.fun...", parse_mode=ParseMode.HTML)
 
 # ====================== MAIN ======================
 def run_scanners():
@@ -87,10 +92,21 @@ def run_scanners():
         time.sleep(1)
 
 if __name__ == "__main__":
+    # Start scanner
     threading.Thread(target=run_scanners, daemon=True).start()
 
+    # Webhook Mode
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
 
-    logger.info("Starting polling...")
-    app.run_polling(drop_pending_updates=True)
+    logger.info("Starting Webhook...")
+    
+    # Use Railway's assigned port
+    PORT = int(os.getenv("PORT", 8080))
+    
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=BOT_TOKEN,
+        webhook_url=f"https://your-railway-url.up.railway.app/{BOT_TOKEN}"
+    )
